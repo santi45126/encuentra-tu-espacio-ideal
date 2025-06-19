@@ -1,25 +1,35 @@
-from flask import Flask, request, jsonify, send_from_directory # type: ignore # Agregado send_from_directory
+from flask import Flask, request, jsonify, send_from_directory # type: ignore
 from flask_cors import CORS # type: ignore
 from flask_sqlalchemy import SQLAlchemy # type: ignore
 import re
-import os # Importar para manejar rutas de archivos
-from werkzeug.utils import secure_filename # type: ignore # Para nombres de archivo seguros
+import os
+from werkzeug.utils import secure_filename # type: ignore
+from dotenv import load_dotenv # type: ignore # Importar load_dotenv
+
+# Cargar las variables de entorno desde el archivo .env
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
 # --- Configuración de la Base de Datos ---
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
+# Se obtiene la URL de la base de datos de la variable de entorno 'DATABASE_URL'
+# (que ahora será cargada por dotenv si existe en .env, o del sistema si la definiste).
+# Si no está definida, usa SQLite como fallback.
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///site.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
 # --- Configuración para Subida de Archivos ---
+# NOTA IMPORTANTE: Para producción (deploy), esta lógica de guardar en 'uploads' no funcionará.
+# Necesitarás un servicio de almacenamiento en la nube como Cloudinary o Amazon S3.
+# Esta configuración es principalmente para el desarrollo local con SQLite.
 UPLOAD_FOLDER = 'uploads' # Carpeta donde se guardarán las imágenes
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'} # Extensiones de archivo permitidas
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Límite de 16MB para los archivos
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024 # Límite de 16MB para los archivos
 
 # Crear la carpeta de uploads si no existe al iniciar la app
 if not os.path.exists(UPLOAD_FOLDER):
@@ -41,14 +51,15 @@ class Department(db.Model):
     bathrooms = db.Column(db.Float, nullable=False)
     description = db.Column(db.Text, nullable=False)
     # image ahora almacenará el nombre del archivo guardado o la URL por defecto
-    image = db.Column(db.String(200), nullable=False, 
-                      default='https://placehold.co/300x200/cccccc/FFFFFF?text=Sin+Imagen') 
+    image = db.Column(db.String(200), nullable=False,
+                      default='https://placehold.co/300x200/cccccc/FFFFFF?text=Sin+Imagen')
 
     def __repr__(self):
         return f"Department('{self.title}', '{self.location}', '{self.price}', '{self.image}')"
 
 # --- Ruta para servir archivos estáticos (imágenes subidas) ---
 # Esta ruta permite que las imágenes en la carpeta 'uploads' sean accesibles por URL.
+# En producción, esto será manejado por un servidor web (Nginx) o un servicio de almacenamiento en la nube.
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -99,7 +110,7 @@ def add_department():
     bedrooms_str = request.form.get('bedrooms') # Se recibe como string
     bathrooms_str = request.form.get('bathrooms') # Se recibe como string
     description = request.form.get('description', '').strip()
-    
+
     image_file = request.files.get('image') # Obtener el archivo de imagen del campo 'image'
 
     errors = {}
@@ -137,7 +148,7 @@ def add_department():
             errors['bathrooms'] = "El número de baños es obligatorio y debe ser un número positivo."
     except (TypeError, ValueError):
         errors['bathrooms'] = "El número de baños es obligatorio y debe ser un número válido."
-    
+
     # --- Manejo de la subida de imagen ---
     image_filename_for_db = 'https://placehold.co/300x200/cccccc/FFFFFF?text=Sin+Imagen' # Valor por defecto
     returned_image_url_for_frontend = image_filename_for_db # Inicialmente la URL por defecto
@@ -147,7 +158,7 @@ def add_department():
             # Generar un nombre de archivo seguro para evitar problemas de ruta y seguridad
             filename = secure_filename(image_file.filename)
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            
+
             # --- Lógica para generar un nombre de archivo único si ya existe ---
             counter = 1
             original_filename_no_ext, ext = os.path.splitext(filename)
@@ -155,7 +166,7 @@ def add_department():
                 filename = f"{original_filename_no_ext}_{counter}{ext}"
                 file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 counter += 1
-            
+
             try:
                 image_file.save(file_path) # Guardar el archivo en el servidor
                 image_filename_for_db = filename # Guardar solo el nombre del archivo en la DB
@@ -182,7 +193,7 @@ def add_department():
     )
     db.session.add(new_department)
     db.session.commit()
-    
+
     # Devolver la URL completa de la imagen al frontend
     return jsonify({
         "id": new_department.id,
@@ -201,13 +212,13 @@ def delete_department(department_id):
     department = db.session.get(Department, department_id)
     if department is None:
         return jsonify({"message": "Departamento no encontrado"}), 404
-    
+
     # --- Eliminar el archivo de imagen asociado si no es la URL por defecto ---
     # Esto es crucial para no dejar archivos "huérfanos" en el servidor.
     if department.image and \
        not department.image.startswith('http://') and \
        not department.image.startswith('https://'): # Si es un nombre de archivo local
-        
+
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], department.image)
         if os.path.exists(file_path):
             try:
@@ -229,7 +240,7 @@ def update_department(department_id):
 
     # Para PUT, los campos también vienen en request.form y request.files
     errors = {}
-    
+
     # Captura los campos de texto del formulario (si vienen en la request)
     # Usamos .get() sin valor por defecto aquí, porque queremos saber si el campo fue enviado.
     # El valor por defecto se aplica dentro de la validación si el campo no es None y está vacío.
@@ -240,7 +251,7 @@ def update_department(department_id):
     bedrooms_data = request.form.get('bedrooms')
     bathrooms_data = request.form.get('bathrooms')
     description_data = request.form.get('description')
-    
+
     # Captura el archivo de imagen (si se envió uno nuevo)
     image_file = request.files.get('image')
     # Este campo oculto lo usaremos desde el frontend para saber si el usuario NO tocó el campo de la imagen
@@ -253,7 +264,7 @@ def update_department(department_id):
             errors['title'] = "El título no puede estar vacío."
         else:
             department.title = title
-    
+
     if location_data is not None:
         location = location_data.strip()
         if not location:
@@ -269,7 +280,7 @@ def update_department(department_id):
             errors['contact'] = "Formato de contacto inválido. Debe ser un número de teléfono válido (7-20 caracteres)."
         else:
             department.contact = contact
-    
+
     # Validaciones y actualización de price
     if price_data is not None:
         try:
@@ -330,12 +341,13 @@ def update_department(department_id):
                 if os.path.exists(old_file_path):
                     try:
                         os.remove(old_file_path)
+                        print(f"Archivo eliminado: {old_file_path}")
                     except OSError as e:
                         print(f"Error al eliminar el archivo antiguo {old_file_path}: {e}")
 
             filename = secure_filename(image_file.filename)
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            
+
             # Generar un nombre único si el archivo ya existe
             counter = 1
             original_filename_no_ext, ext = os.path.splitext(filename)
@@ -374,7 +386,7 @@ def update_department(department_id):
         return jsonify({"message": "Error de validación", "errors": errors}), 400
 
     db.session.commit()
-    
+
     # Devolver la URL completa de la imagen al frontend
     returned_image_url = department.image
     if not returned_image_url.startswith('http://') and not returned_image_url.startswith('https://'):
